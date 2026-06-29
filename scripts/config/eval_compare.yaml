@@ -1,0 +1,31 @@
+seed: 1234
+dataset: "planning-datasets/data/mpd/mazes_032_moore_c8"
+split: "test"
+batch_size: 100
+max_batches: null
+device: "auto"
+
+neural_ckpt: null
+diffusion_ckpt: null
+
+neural:
+  encoder_input: "m+"
+  encoder_arch: "CNN"
+  encoder_depth: 4
+
+diffusion_model:
+  unet:
+    model_type: "baseline"
+    target_channels: 1
+    base_channels: 64
+    time_emb_dim: 256
+    channel_mults: [1, 2, 4, 8]
+  diffusion:
+    num_steps: 100
+    beta_schedule: "cosine"
+    clip_sample: True
+  start_goal_sigma: 1.0
+
+hydra:
+  job:
+    chdir: False

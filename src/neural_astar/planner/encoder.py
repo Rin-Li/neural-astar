@@ -4,7 +4,6 @@ Affiliation: OSX
 """
 from __future__ import annotations
 
-import segmentation_models_pytorch as smp
 import torch
 import torch.nn as nn
 
@@ -46,6 +45,8 @@ class Unet(EncoderBase):
             input_dim (int): input dimension
             encoder_depth (int, optional): depth of the encoder.
         """
+        import segmentation_models_pytorch as smp
+
         decoder_channels = self.DECODER_CHANNELS[:encoder_depth]
         return smp.Unet(
             encoder_name="vgg16_bn",

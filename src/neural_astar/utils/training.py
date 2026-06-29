@@ -13,8 +13,10 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim
 from neural_astar.planner.astar import VanillaAstar
+from neural_astar.utils.heatmap import mask_to_gaussian_heatmap
 
 
 def load_from_ptl_checkpoint(checkpoint_path: str) -> dict:
@@ -77,6 +79,79 @@ class PlannerModule(pl.LightningModule):
             exp_astar = va_outputs.histories.sum((1, 2, 3)).detach().cpu().numpy()
             exp_na = outputs.histories.sum((1, 2, 3)).detach().cpu().numpy()
             p_exp = np.maximum((exp_astar - exp_na) / exp_astar, 0.0).mean()
+
+            h_mean = 2.0 / (1.0 / (p_opt + 1e-10) + 1.0 / (p_exp + 1e-10))
+
+            self.log("metrics/p_opt", p_opt)
+            self.log("metrics/p_exp", p_exp)
+            self.log("metrics/h_mean", h_mean)
+
+        return loss
+
+
+class DiffusionPlannerModule(pl.LightningModule):
+    """Lightning module for training only the diffusion cost-map generator."""
+
+    def __init__(self, planner, config):
+        super().__init__()
+        self.planner = planner
+        self.vanilla_astar = VanillaAstar()
+        self.config = config
+        self.trajectory_sigma = float(config.diffusion.get("trajectory_sigma", 1.0))
+
+    def forward(self, map_designs, start_maps, goal_maps):
+        return self.planner(map_designs, start_maps, goal_maps)
+
+    def configure_optimizers(self) -> torch.optim.Optimizer:
+        return torch.optim.Adam(self.planner.unet.parameters(), self.config.params.lr)
+
+    def training_step(self, train_batch, batch_idx):
+        map_designs, start_maps, goal_maps, opt_trajs = train_batch
+        target_mask = torch.clamp(opt_trajs[:, :1] + goal_maps[:, :1], 0.0, 1.0)
+        target = mask_to_gaussian_heatmap(target_mask, sigma=self.trajectory_sigma)
+        obstacle, start_hm, goal_hm = self.planner.build_condition(
+            map_designs,
+            start_maps[:, :1],
+            goal_maps[:, :1],
+        )
+
+        batch_size = target.shape[0]
+        timesteps = torch.randint(
+            0,
+            self.planner.diffusion.num_steps,
+            (batch_size,),
+            device=target.device,
+            dtype=torch.long,
+        )
+        noise = torch.randn_like(target)
+        self.planner.diffusion.to(target.device)
+        x_t = self.planner.diffusion.q_sample(target, timesteps, noise)
+        pred_noise = self.planner.unet(x_t, obstacle, start_hm, goal_hm, timesteps)
+        loss = F.mse_loss(pred_noise, noise)
+
+        self.log("metrics/train_loss", loss)
+        return loss
+
+    def validation_step(self, val_batch, batch_idx):
+        map_designs, start_maps, goal_maps, opt_trajs = val_batch
+        outputs = self.forward(map_designs, start_maps[:, :1], goal_maps[:, :1])
+        loss = nn.L1Loss()(outputs.histories, opt_trajs[:, :1])
+
+        self.log("metrics/val_loss", loss)
+
+        if map_designs.shape[1] == 1:
+            va_outputs = self.vanilla_astar(
+                map_designs,
+                start_maps[:, :1],
+                goal_maps[:, :1],
+            )
+            pathlen_astar = va_outputs.paths.sum((1, 2, 3)).detach().cpu().numpy()
+            pathlen_model = outputs.paths.sum((1, 2, 3)).detach().cpu().numpy()
+            p_opt = (pathlen_astar == pathlen_model).mean()
+
+            exp_astar = va_outputs.histories.sum((1, 2, 3)).detach().cpu().numpy()
+            exp_model = outputs.histories.sum((1, 2, 3)).detach().cpu().numpy()
+            p_exp = np.maximum((exp_astar - exp_model) / exp_astar, 0.0).mean()
 
             h_mean = 2.0 / (1.0 / (p_opt + 1e-10) + 1.0 / (p_exp + 1e-10))
 

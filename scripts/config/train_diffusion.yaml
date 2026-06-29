@@ -1,0 +1,29 @@
+seed: 1234
+dataset: "planning-datasets/data/mpd/mazes_032_moore_c8"
+logdir: "model"
+Tmax: 0.25
+
+unet:
+  model_type: "baseline"
+  target_channels: 1
+  base_channels: 64
+  time_emb_dim: 256
+  channel_mults: [1, 2, 4, 8]
+
+diffusion:
+  num_steps: 100
+  beta_schedule: "cosine"
+  clip_sample: True
+  trajectory_sigma: 1.0
+  start_goal_sigma: 1.0
+
+params:
+  batch_size: 100
+  num_epochs: 50
+  lr: 0.0001
+  limit_train_batches: null
+  limit_val_batches: null
+
+hydra:
+  job:
+    chdir: False
