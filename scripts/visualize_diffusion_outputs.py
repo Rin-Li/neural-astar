@@ -15,6 +15,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import torch
 
@@ -108,8 +109,7 @@ def _heat(ax, data, title, cmap="magma", blocked=None):
     ax.set_yticks([])
 
 
-def _save_panel(
-    output_file: Path,
+def _build_panel_figure(
     map_design: np.ndarray,
     start: np.ndarray,
     goal: np.ndarray,
@@ -123,7 +123,7 @@ def _save_panel(
     gdpp: AstarOutput | None,
     gdpp_cost: np.ndarray | None,
     title: str,
-) -> None:
+):
     blocked = map_design < 0.5
     fig, axes = plt.subplots(3, 4, figsize=(11, 8), constrained_layout=True)
     axes = axes.flatten()
@@ -190,7 +190,44 @@ def _save_panel(
     axes[10].axis("off")
     axes[11].axis("off")
     fig.suptitle(title, fontsize=11)
+    return fig
+
+
+def _save_panel(
+    output_file: Path,
+    pdf_pages: PdfPages | None,
+    map_design: np.ndarray,
+    start: np.ndarray,
+    goal: np.ndarray,
+    opt_traj: np.ndarray,
+    vanilla: AstarOutput,
+    neural: AstarOutput | None,
+    neural_cost: np.ndarray | None,
+    diffusion: AstarOutput | None,
+    diffusion_heatmap: np.ndarray | None,
+    diffusion_cost: np.ndarray | None,
+    gdpp: AstarOutput | None,
+    gdpp_cost: np.ndarray | None,
+    title: str,
+) -> None:
+    fig = _build_panel_figure(
+        map_design,
+        start,
+        goal,
+        opt_traj,
+        vanilla,
+        neural,
+        neural_cost,
+        diffusion,
+        diffusion_heatmap,
+        diffusion_cost,
+        gdpp,
+        gdpp_cost,
+        title,
+    )
     fig.savefig(output_file, dpi=160)
+    if pdf_pages is not None:
+        pdf_pages.savefig(fig)
     plt.close(fig)
 
 
@@ -278,6 +315,7 @@ def main() -> None:
     parser.add_argument("--neural-encoder-arch", default="CNN")
     parser.add_argument("--neural-encoder-depth", type=int, default=4)
     parser.add_argument("--contact-sheet-max", type=int, default=32)
+    parser.add_argument("--pdf-name", default="samples.pdf")
     args = parser.parse_args()
 
     set_global_seeds(args.seed)
@@ -295,6 +333,8 @@ def main() -> None:
 
     rows = []
     sample_files = []
+    pdf_file = output_dir / args.pdf_name
+    pdf_pages = PdfPages(pdf_file)
     for sample_idx in range(args.num_samples):
         map_design_np, start_np, goal_np, opt_np = dataset[sample_idx % len(dataset)]
         map_design = torch.from_numpy(map_design_np).unsqueeze(0).to(device)
@@ -369,6 +409,7 @@ def main() -> None:
         sample_file = sample_dir / f"sample_{sample_idx:04d}.png"
         _save_panel(
             sample_file,
+            pdf_pages,
             map_design_np[0],
             start_np[0],
             goal_np[0],
@@ -386,6 +427,7 @@ def main() -> None:
         sample_files.append(sample_file)
         if (sample_idx + 1) % 25 == 0:
             print(f"wrote {sample_idx + 1}/{args.num_samples} samples")
+    pdf_pages.close()
 
     metrics_file = output_dir / "per_sample_metrics.csv"
     with metrics_file.open("w", newline="") as handle:
@@ -400,6 +442,7 @@ def main() -> None:
     print(f"wrote samples to {sample_dir}")
     print(f"wrote metrics to {metrics_file}")
     print(f"wrote contact sheet to {output_dir / 'contact_sheet.png'}")
+    print(f"wrote PDF to {pdf_file}")
 
 
 if __name__ == "__main__":

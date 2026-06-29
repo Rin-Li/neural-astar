@@ -21,6 +21,8 @@ RUN_MARKER="${RUN_DIR}/run.marker"
 
 NEURAL_CKPT_DEFAULT="model/mazes_032_moore_c8/lightning_logs/version_0/checkpoints/epoch=33-step=272.ckpt"
 NEURAL_CKPT="${NEURAL_CKPT:-$NEURAL_CKPT_DEFAULT}"
+DIFFUSION_CKPT="${DIFFUSION_CKPT:-}"
+REUSE_CHECKPOINT="${REUSE_CHECKPOINT:-true}"
 
 EPOCHS="${EPOCHS:-500}"
 BATCH_SIZE="${BATCH_SIZE:-100}"
@@ -111,6 +113,35 @@ if [[ ! -f "$NEURAL_CKPT" ]]; then
   NEURAL_CKPT="null"
 fi
 
+find_existing_diffusion_ckpt() {
+  "$PYTHON_BIN" - "$TRAIN_ROOT" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+if not root.exists():
+    raise SystemExit(0)
+
+epoch_ckpts = sorted(root.rglob("epoch=*.ckpt"), key=lambda path: path.stat().st_mtime, reverse=True)
+if epoch_ckpts:
+    print(epoch_ckpts[0])
+    raise SystemExit(0)
+
+last_ckpts = sorted(root.rglob("last.ckpt"), key=lambda path: path.stat().st_mtime, reverse=True)
+if last_ckpts:
+    print(last_ckpts[0])
+PY
+}
+
+if [[ -n "$DIFFUSION_CKPT" && "$DIFFUSION_CKPT" != "null" && ! -f "$DIFFUSION_CKPT" ]]; then
+  echo "ERROR: DIFFUSION_CKPT was provided but does not exist: $DIFFUSION_CKPT" >&2
+  exit 1
+fi
+
+if [[ -z "$DIFFUSION_CKPT" && "$REUSE_CHECKPOINT" == "true" ]]; then
+  DIFFUSION_CKPT="$(find_existing_diffusion_ckpt)"
+fi
+
 train_overrides=(
   "dataset=$DATASET"
   "logdir=$LOGDIR"
@@ -145,14 +176,21 @@ if [[ -n "$TRAIN_EXTRA_OVERRIDES" ]]; then
   train_overrides+=( $TRAIN_EXTRA_OVERRIDES )
 fi
 
-echo
-echo "== Training diffusion planner from scratch =="
-"$PYTHON_BIN" scripts/train_diffusion.py "${train_overrides[@]}" 2>&1 | tee "$RUN_DIR/train.log"
+if [[ -n "$DIFFUSION_CKPT" && -f "$DIFFUSION_CKPT" ]]; then
+  echo
+  echo "== Reusing existing diffusion checkpoint =="
+  echo "diffusion_ckpt: $DIFFUSION_CKPT"
+  echo "skipped training because REUSE_CHECKPOINT=$REUSE_CHECKPOINT"
+  : > "$RUN_DIR/train.log"
+else
+  echo
+  echo "== Training diffusion planner from scratch =="
+  "$PYTHON_BIN" scripts/train_diffusion.py "${train_overrides[@]}" 2>&1 | tee "$RUN_DIR/train.log"
 
-DIFFUSION_CKPT="$(grep -E '^best_model_path=' "$RUN_DIR/train.log" | tail -n 1 | cut -d= -f2-)"
-if [[ -z "$DIFFUSION_CKPT" || ! -f "$DIFFUSION_CKPT" ]]; then
-  DIFFUSION_CKPT="$(
-  "$PYTHON_BIN" - "$TRAIN_ROOT" "$RUN_MARKER" <<'PY'
+  DIFFUSION_CKPT="$(grep -E '^best_model_path=' "$RUN_DIR/train.log" | tail -n 1 | cut -d= -f2-)"
+  if [[ -z "$DIFFUSION_CKPT" || ! -f "$DIFFUSION_CKPT" ]]; then
+    DIFFUSION_CKPT="$(
+    "$PYTHON_BIN" - "$TRAIN_ROOT" "$RUN_MARKER" <<'PY'
 import pathlib
 import sys
 
@@ -166,7 +204,8 @@ checkpoints = [
 if checkpoints:
     print(max(checkpoints, key=lambda path: path.stat().st_mtime))
 PY
-  )"
+    )"
+  fi
 fi
 
 if [[ -z "$DIFFUSION_CKPT" || ! -f "$DIFFUSION_CKPT" ]]; then
@@ -244,6 +283,7 @@ if [[ "$VISUALIZE_SAMPLES" != "0" ]]; then
     --gdpp-lam 1.0
     --gdpp-heuristic-weight 1.0
     --contact-sheet-max "$VISUALIZE_CONTACT_SHEET_MAX"
+    --pdf-name samples.pdf
   )
   if [[ "$NEURAL_CKPT" != "null" ]]; then
     visualize_args+=(--neural-ckpt "$NEURAL_CKPT")
@@ -264,6 +304,7 @@ fi
   echo "eval_log=$RUN_DIR/eval.log"
   echo "plots=$PLOT_DIR"
   echo "visualizations=$VISUALIZE_DIR"
+  echo "visualization_pdf=$VISUALIZE_DIR/samples.pdf"
 } > "$RUN_DIR/summary.env"
 
 echo

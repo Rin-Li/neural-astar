@@ -116,7 +116,29 @@ plots/eval_metrics.png
 plots/eval_metrics.csv
 visualizations/contact_sheet.png
 visualizations/per_sample_metrics.csv
+visualizations/samples.pdf
 visualizations/samples/sample_*.png
+```
+
+By default, the runner reuses an existing diffusion checkpoint if it can find
+one under:
+
+```text
+model/gdpp_diffusion_from_scratch/mazes_032_moore_c8_diffusion/
+```
+
+It prefers the newest `epoch=*.ckpt`, falling back to `last.ckpt`. To force a
+fresh train, run:
+
+```bash
+REUSE_CHECKPOINT=false bash scripts/run_diffusion_from_scratch_eval.sh
+```
+
+To evaluate/visualize a specific checkpoint and skip training:
+
+```bash
+DIFFUSION_CKPT='/path/to/diffusion.ckpt' \
+bash scripts/run_diffusion_from_scratch_eval.sh
 ```
 
 ## Useful Overrides
@@ -215,7 +237,8 @@ python scripts/visualize_diffusion_outputs.py \
 
 The visualization panels include map/ground-truth path, VanillaAstar path,
 NeuralAstar cost/path, diffusion heatmap, `1 - heatmap` cost/path, and GDPP
-`-log(heatmap + eps)` cost/path.
+`-log(heatmap + eps)` cost/path. The script writes both individual PNGs and one
+multi-page PDF at `visualizations/samples.pdf`.
 
 ## Notes for Future Agents
 
