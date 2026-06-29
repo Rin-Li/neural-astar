@@ -29,6 +29,7 @@ Important files:
 - `scripts/eval_compare.py`: VanillaAstar / NeuralAstar / DiffusionAstar comparison.
 - `scripts/run_diffusion_from_scratch_eval.sh`: one-command train-from-scratch and evaluate runner.
 - `scripts/plot_diffusion_results.py`: training curve and eval metric plots.
+- `scripts/visualize_diffusion_outputs.py`: per-scene map, cost, heatmap, path, and history panels.
 
 ## Environment
 
@@ -113,6 +114,9 @@ plots/training_curves.png
 plots/training_scalars.csv
 plots/eval_metrics.png
 plots/eval_metrics.csv
+visualizations/contact_sheet.png
+visualizations/per_sample_metrics.csv
+visualizations/samples/sample_*.png
 ```
 
 ## Useful Overrides
@@ -197,6 +201,21 @@ python scripts/plot_diffusion_results.py \
   --eval-log outputs/gdpp_diffusion_from_scratch/<timestamp>/eval.log \
   --output-dir outputs/gdpp_diffusion_from_scratch/<timestamp>/plots
 ```
+
+Visualize 200 test scenes from an existing checkpoint:
+
+```bash
+python scripts/visualize_diffusion_outputs.py \
+  --dataset planning-datasets/data/mpd/mazes_032_moore_c8.npz \
+  --output-dir outputs/gdpp_diffusion_from_scratch/<timestamp>/visualizations \
+  --num-samples 200 \
+  --neural-ckpt 'model/mazes_032_moore_c8/lightning_logs/version_0/checkpoints/epoch=33-step=272.ckpt' \
+  --diffusion-ckpt '/path/to/diffusion.ckpt'
+```
+
+The visualization panels include map/ground-truth path, VanillaAstar path,
+NeuralAstar cost/path, diffusion heatmap, `1 - heatmap` cost/path, and GDPP
+`-log(heatmap + eps)` cost/path.
 
 ## Notes for Future Agents
 

@@ -38,6 +38,9 @@ START_GOAL_SIGMA="${START_GOAL_SIGMA:-1.0}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-100}"
 EVAL_MAX_BATCHES="${EVAL_MAX_BATCHES:-null}"
 EVAL_DEVICE="${EVAL_DEVICE:-auto}"
+VISUALIZE_SAMPLES="${VISUALIZE_SAMPLES:-200}"
+VISUALIZE_CONTACT_SHEET_MAX="${VISUALIZE_CONTACT_SHEET_MAX:-32}"
+VISUALIZE_DEVICE="${VISUALIZE_DEVICE:-$EVAL_DEVICE}"
 
 EARLY_STOP="${EARLY_STOP:-true}"
 EARLY_STOP_MONITOR="${EARLY_STOP_MONITOR:-metrics/val_diffusion_loss}"
@@ -217,6 +220,41 @@ else
   echo "WARNING: plotting failed; install matplotlib and tensorboard to generate plots" >&2
 fi
 
+VISUALIZE_DIR="$RUN_DIR/visualizations"
+if [[ "$VISUALIZE_SAMPLES" != "0" ]]; then
+  echo
+  echo "== Visualizing planner outputs (${VISUALIZE_SAMPLES} samples) =="
+  # Convert Hydra-style "[1,2,4,8]" into argparse tokens: 1 2 4 8.
+  # shellcheck disable=SC2207
+  CHANNEL_MULTS_TOKENS=($(printf '%s' "$CHANNEL_MULTS" | tr -d '[]' | tr ',' ' '))
+  visualize_args=(
+    --dataset "$DATASET_FILE"
+    --split test
+    --output-dir "$VISUALIZE_DIR"
+    --num-samples "$VISUALIZE_SAMPLES"
+    --device "$VISUALIZE_DEVICE"
+    --diffusion-ckpt "$DIFFUSION_CKPT"
+    --diffusion-steps "$DIFFUSION_STEPS"
+    --beta-schedule "$BETA_SCHEDULE"
+    --diffusion-model-type "$UNET_MODEL_TYPE"
+    --base-channels "$BASE_CHANNELS"
+    --time-emb-dim "$TIME_EMB_DIM"
+    --channel-mults "${CHANNEL_MULTS_TOKENS[@]}"
+    --start-goal-sigma "$START_GOAL_SIGMA"
+    --gdpp-lam 1.0
+    --gdpp-heuristic-weight 1.0
+    --contact-sheet-max "$VISUALIZE_CONTACT_SHEET_MAX"
+  )
+  if [[ "$NEURAL_CKPT" != "null" ]]; then
+    visualize_args+=(--neural-ckpt "$NEURAL_CKPT")
+  fi
+  if "$PYTHON_BIN" scripts/visualize_diffusion_outputs.py "${visualize_args[@]}" 2>&1 | tee "$RUN_DIR/visualize.log"; then
+    echo "visualizations: $VISUALIZE_DIR"
+  else
+    echo "WARNING: visualization failed; install matplotlib and ensure checkpoints/configs match" >&2
+  fi
+fi
+
 {
   echo "run_dir=$RUN_DIR"
   echo "dataset=$DATASET_FILE"
@@ -225,6 +263,7 @@ fi
   echo "train_log=$RUN_DIR/train.log"
   echo "eval_log=$RUN_DIR/eval.log"
   echo "plots=$PLOT_DIR"
+  echo "visualizations=$VISUALIZE_DIR"
 } > "$RUN_DIR/summary.env"
 
 echo
