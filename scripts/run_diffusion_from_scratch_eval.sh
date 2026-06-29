@@ -22,7 +22,7 @@ RUN_MARKER="${RUN_DIR}/run.marker"
 NEURAL_CKPT_DEFAULT="model/mazes_032_moore_c8/lightning_logs/version_0/checkpoints/epoch=33-step=272.ckpt"
 NEURAL_CKPT="${NEURAL_CKPT:-$NEURAL_CKPT_DEFAULT}"
 
-EPOCHS="${EPOCHS:-50}"
+EPOCHS="${EPOCHS:-500}"
 BATCH_SIZE="${BATCH_SIZE:-100}"
 LR="${LR:-0.0001}"
 TMAX="${TMAX:-0.25}"
@@ -38,6 +38,19 @@ START_GOAL_SIGMA="${START_GOAL_SIGMA:-1.0}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-100}"
 EVAL_MAX_BATCHES="${EVAL_MAX_BATCHES:-null}"
 EVAL_DEVICE="${EVAL_DEVICE:-auto}"
+
+EARLY_STOP="${EARLY_STOP:-true}"
+EARLY_STOP_MONITOR="${EARLY_STOP_MONITOR:-metrics/val_diffusion_loss}"
+EARLY_STOP_MODE="${EARLY_STOP_MODE:-min}"
+EARLY_STOP_PATIENCE="${EARLY_STOP_PATIENCE:-80}"
+EARLY_STOP_MIN_DELTA="${EARLY_STOP_MIN_DELTA:-0.0001}"
+CHECKPOINT_MONITOR="${CHECKPOINT_MONITOR:-metrics/h_mean}"
+CHECKPOINT_MODE="${CHECKPOINT_MODE:-max}"
+DEVICES="${DEVICES:-null}"
+STRATEGY="${STRATEGY:-null}"
+PRECISION="${PRECISION:-null}"
+ACCUMULATE_GRAD_BATCHES="${ACCUMULATE_GRAD_BATCHES:-1}"
+CHECK_VAL_EVERY_N_EPOCH="${CHECK_VAL_EVERY_N_EPOCH:-1}"
 
 # Optional Hydra override fragments appended verbatim.
 TRAIN_EXTRA_OVERRIDES="${TRAIN_EXTRA_OVERRIDES:-}"
@@ -75,6 +88,8 @@ echo "dataset:     $DATASET_FILE"
 echo "run_dir:     $RUN_DIR"
 echo "logdir:      $LOGDIR"
 echo "train_root:  $TRAIN_ROOT"
+echo "epochs:      $EPOCHS"
+echo "early_stop:  $EARLY_STOP_MONITOR ($EARLY_STOP_MODE, patience=$EARLY_STOP_PATIENCE)"
 
 if [[ ! -f "$DATASET_FILE" ]]; then
   echo "Dataset not found; initializing planning-datasets submodule..."
@@ -108,6 +123,18 @@ train_overrides=(
   "unet.base_channels=$BASE_CHANNELS"
   "unet.time_emb_dim=$TIME_EMB_DIM"
   "unet.channel_mults=$CHANNEL_MULTS"
+  "checkpoint.monitor=$CHECKPOINT_MONITOR"
+  "checkpoint.mode=$CHECKPOINT_MODE"
+  "early_stop.enabled=$EARLY_STOP"
+  "early_stop.monitor=$EARLY_STOP_MONITOR"
+  "early_stop.mode=$EARLY_STOP_MODE"
+  "early_stop.patience=$EARLY_STOP_PATIENCE"
+  "early_stop.min_delta=$EARLY_STOP_MIN_DELTA"
+  "trainer.devices=$DEVICES"
+  "trainer.strategy=$STRATEGY"
+  "trainer.precision=$PRECISION"
+  "trainer.accumulate_grad_batches=$ACCUMULATE_GRAD_BATCHES"
+  "trainer.check_val_every_n_epoch=$CHECK_VAL_EVERY_N_EPOCH"
 )
 
 if [[ -n "$TRAIN_EXTRA_OVERRIDES" ]]; then
@@ -119,7 +146,9 @@ echo
 echo "== Training diffusion planner from scratch =="
 "$PYTHON_BIN" scripts/train_diffusion.py "${train_overrides[@]}" 2>&1 | tee "$RUN_DIR/train.log"
 
-DIFFUSION_CKPT="$(
+DIFFUSION_CKPT="$(grep -E '^best_model_path=' "$RUN_DIR/train.log" | tail -n 1 | cut -d= -f2-)"
+if [[ -z "$DIFFUSION_CKPT" || ! -f "$DIFFUSION_CKPT" ]]; then
+  DIFFUSION_CKPT="$(
   "$PYTHON_BIN" - "$TRAIN_ROOT" "$RUN_MARKER" <<'PY'
 import pathlib
 import sys
@@ -134,7 +163,8 @@ checkpoints = [
 if checkpoints:
     print(max(checkpoints, key=lambda path: path.stat().st_mtime))
 PY
-)"
+  )"
+fi
 
 if [[ -z "$DIFFUSION_CKPT" || ! -f "$DIFFUSION_CKPT" ]]; then
   echo "ERROR: no new diffusion checkpoint found under $TRAIN_ROOT" >&2
@@ -171,8 +201,21 @@ if [[ -n "$EVAL_EXTRA_OVERRIDES" ]]; then
 fi
 
 echo
-echo "== Evaluating VanillaAstar / NeuralAstar / DiffusionAstar =="
+echo "== Evaluating VanillaAstar / NeuralAstar / DiffusionAstar / GDPPNoMSE =="
 "$PYTHON_BIN" scripts/eval_compare.py "${eval_overrides[@]}" 2>&1 | tee "$RUN_DIR/eval.log"
+
+LIGHTNING_RUN_DIR="$(dirname "$(dirname "$DIFFUSION_CKPT")")"
+PLOT_DIR="$RUN_DIR/plots"
+echo
+echo "== Plotting training/evaluation curves =="
+if "$PYTHON_BIN" scripts/plot_diffusion_results.py \
+  --event-dir "$LIGHTNING_RUN_DIR" \
+  --eval-log "$RUN_DIR/eval.log" \
+  --output-dir "$PLOT_DIR"; then
+  echo "plots: $PLOT_DIR"
+else
+  echo "WARNING: plotting failed; install matplotlib and tensorboard to generate plots" >&2
+fi
 
 {
   echo "run_dir=$RUN_DIR"
@@ -181,6 +224,7 @@ echo "== Evaluating VanillaAstar / NeuralAstar / DiffusionAstar =="
   echo "neural_ckpt=$NEURAL_CKPT"
   echo "train_log=$RUN_DIR/train.log"
   echo "eval_log=$RUN_DIR/eval.log"
+  echo "plots=$PLOT_DIR"
 } > "$RUN_DIR/summary.env"
 
 echo

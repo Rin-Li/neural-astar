@@ -26,6 +26,11 @@ diffusion_model:
     clip_sample: True
   start_goal_sigma: 1.0
 
+gdpp_no_mse:
+  enabled: True
+  lam: 1.0
+  heuristic_weight: 1.0
+
 hydra:
   job:
     chdir: False

@@ -105,8 +105,8 @@ class DiffusionPlannerModule(pl.LightningModule):
     def configure_optimizers(self) -> torch.optim.Optimizer:
         return torch.optim.Adam(self.planner.unet.parameters(), self.config.params.lr)
 
-    def training_step(self, train_batch, batch_idx):
-        map_designs, start_maps, goal_maps, opt_trajs = train_batch
+    def _diffusion_loss(self, batch) -> torch.Tensor:
+        map_designs, start_maps, goal_maps, opt_trajs = batch
         target_mask = torch.clamp(opt_trajs[:, :1] + goal_maps[:, :1], 0.0, 1.0)
         target = mask_to_gaussian_heatmap(target_mask, sigma=self.trajectory_sigma)
         obstacle, start_hm, goal_hm = self.planner.build_condition(
@@ -127,17 +127,23 @@ class DiffusionPlannerModule(pl.LightningModule):
         self.planner.diffusion.to(target.device)
         x_t = self.planner.diffusion.q_sample(target, timesteps, noise)
         pred_noise = self.planner.unet(x_t, obstacle, start_hm, goal_hm, timesteps)
-        loss = F.mse_loss(pred_noise, noise)
+        return F.mse_loss(pred_noise, noise)
 
-        self.log("metrics/train_loss", loss)
+    def training_step(self, train_batch, batch_idx):
+        loss = self._diffusion_loss(train_batch)
+
+        self.log("metrics/train_loss", loss, on_step=True, on_epoch=True, sync_dist=True)
         return loss
 
     def validation_step(self, val_batch, batch_idx):
         map_designs, start_maps, goal_maps, opt_trajs = val_batch
-        outputs = self.forward(map_designs, start_maps[:, :1], goal_maps[:, :1])
-        loss = nn.L1Loss()(outputs.histories, opt_trajs[:, :1])
+        diffusion_loss = self._diffusion_loss(val_batch)
+        self.log("metrics/val_diffusion_loss", diffusion_loss, on_epoch=True, sync_dist=True)
 
-        self.log("metrics/val_loss", loss)
+        outputs = self.forward(map_designs, start_maps[:, :1], goal_maps[:, :1])
+        astar_l1 = nn.L1Loss()(outputs.histories, opt_trajs[:, :1])
+
+        self.log("metrics/val_astar_l1", astar_l1, on_epoch=True, sync_dist=True)
 
         if map_designs.shape[1] == 1:
             va_outputs = self.vanilla_astar(
@@ -155,11 +161,11 @@ class DiffusionPlannerModule(pl.LightningModule):
 
             h_mean = 2.0 / (1.0 / (p_opt + 1e-10) + 1.0 / (p_exp + 1e-10))
 
-            self.log("metrics/p_opt", p_opt)
-            self.log("metrics/p_exp", p_exp)
-            self.log("metrics/h_mean", h_mean)
+            self.log("metrics/p_opt", p_opt, on_epoch=True, sync_dist=True)
+            self.log("metrics/p_exp", p_exp, on_epoch=True, sync_dist=True)
+            self.log("metrics/h_mean", h_mean, on_epoch=True, sync_dist=True)
 
-        return loss
+        return diffusion_loss
 
 
 def set_global_seeds(seed: int) -> None:

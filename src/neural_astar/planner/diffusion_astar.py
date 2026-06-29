@@ -82,6 +82,16 @@ class DiffusionAstar(VanillaAstar):
         goal_maps: torch.tensor,
     ) -> torch.tensor:
         """Sample a trajectory heatmap via DDPM and flip it into a cost map."""
+        heatmap = self.sample_heatmap(map_designs, start_maps, goal_maps)
+        return 1.0 - heatmap.clamp(0.0, 1.0)
+
+    def sample_heatmap(
+        self,
+        map_designs: torch.tensor,
+        start_maps: torch.tensor,
+        goal_maps: torch.tensor,
+    ) -> torch.tensor:
+        """Sample the bright-path trajectory heatmap via DDPM."""
         obstacle, start_hm, goal_hm = self.build_condition(map_designs, start_maps, goal_maps)
         target_channels = int(self.unet_config.get("target_channels", 1))
         shape = (
@@ -91,9 +101,7 @@ class DiffusionAstar(VanillaAstar):
             map_designs.shape[-1],
         )
         heatmap = self.diffusion.sample(self.unet, obstacle, start_hm, goal_hm, shape=shape)
-        heatmap = heatmap[:, :1]  # keep the path-occupancy channel
-        cost_maps = 1.0 - heatmap.clamp(0.0, 1.0)
-        return cost_maps
+        return heatmap[:, :1]  # keep the path-occupancy channel
 
     def forward(
         self,

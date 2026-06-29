@@ -23,10 +23,12 @@ Important files:
 - `src/neural_astar/planner/diffusion_unet.py`: GDPP conditional U-Net, fully convolutional and compatible with 32x32 maps.
 - `src/neural_astar/utils/heatmap.py`: Gaussian mask-to-heatmap helper.
 - `src/neural_astar/planner/diffusion_astar.py`: `DiffusionAstar`, which samples a heatmap and flips it into a cost map.
+- `src/neural_astar/planner/gdpp_no_mse_astar.py`: `GDPPNoMSEAstar`, which runs GDPP heatmap-cost A* and skips render-MSE.
 - `src/neural_astar/utils/training.py`: `DiffusionPlannerModule`, which trains DDPM noise prediction.
 - `scripts/train_diffusion.py`: Hydra training entry point.
 - `scripts/eval_compare.py`: VanillaAstar / NeuralAstar / DiffusionAstar comparison.
 - `scripts/run_diffusion_from_scratch_eval.sh`: one-command train-from-scratch and evaluate runner.
+- `scripts/plot_diffusion_results.py`: training curve and eval metric plots.
 
 ## Environment
 
@@ -43,6 +45,8 @@ torch
 pytorch_lightning
 hydra-core
 omegaconf
+matplotlib
+tensorboard
 ```
 
 If dependencies are missing, create or activate an environment before running
@@ -71,11 +75,25 @@ Default full run:
 bash scripts/run_diffusion_from_scratch_eval.sh
 ```
 
-This trains a fresh diffusion model from random initialization, then evaluates:
+This trains a fresh diffusion model from random initialization. The default is
+longer training with early stopping:
+
+```text
+max epochs: 500
+early stop monitor: metrics/val_diffusion_loss
+early stop mode: min
+early stop patience: 80 validation epochs
+checkpoint monitor: metrics/h_mean
+checkpoint mode: max
+```
+
+The runner evaluates the printed `best_model_path`, not merely the latest
+checkpoint. It then compares:
 
 - `VanillaAstar`
 - `NeuralAstar`, if `NEURAL_CKPT` exists
-- `DiffusionAstar`, using the newly trained checkpoint
+- `DiffusionAstar`, using the newly trained checkpoint and neural-astar's DifferentiableAstar
+- `GDPPNoMSE`, using the same checkpoint with GDPP-style plain A* and no render-MSE
 
 Default output locations:
 
@@ -91,6 +109,10 @@ train.log
 eval.log
 diffusion_ckpt.txt
 summary.env
+plots/training_curves.png
+plots/training_scalars.csv
+plots/eval_metrics.png
+plots/eval_metrics.csv
 ```
 
 ## Useful Overrides
@@ -113,7 +135,14 @@ bash scripts/run_diffusion_from_scratch_eval.sh
 Longer training with default 32x32-compatible U-Net:
 
 ```bash
-EPOCHS=50 BATCH_SIZE=100 DIFFUSION_STEPS=100 \
+EPOCHS=500 BATCH_SIZE=100 DIFFUSION_STEPS=100 \
+bash scripts/run_diffusion_from_scratch_eval.sh
+```
+
+Four-GPU DDP example:
+
+```bash
+DEVICES=4 STRATEGY=ddp EPOCHS=500 EARLY_STOP_PATIENCE=80 \
 bash scripts/run_diffusion_from_scratch_eval.sh
 ```
 
@@ -160,11 +189,26 @@ PYTHONPATH=src python scripts/eval_compare.py \
 Hydra needs `=` characters inside checkpoint filenames escaped as `\=`.
 The runner handles this automatically.
 
+Plot an existing run:
+
+```bash
+python scripts/plot_diffusion_results.py \
+  --event-dir model/gdpp_diffusion_from_scratch/mazes_032_moore_c8_diffusion/lightning_logs/version_0 \
+  --eval-log outputs/gdpp_diffusion_from_scratch/<timestamp>/eval.log \
+  --output-dir outputs/gdpp_diffusion_from_scratch/<timestamp>/plots
+```
+
 ## Notes for Future Agents
 
 - `DiffusionPlannerModule.training_step` does not run A*. It trains the DDPM
   denoising objective on a Gaussianized `opt_traj + goal_map` target.
+- Validation logs both `metrics/val_diffusion_loss` for convergence/early-stop
+  and A* metrics (`metrics/p_opt`, `metrics/p_exp`, `metrics/h_mean`) for model
+  selection.
 - Validation and evaluation do run the existing `DifferentiableAstar`.
+- `GDPPNoMSE` is the exception: it evaluates the same diffusion heatmap with
+  GDPP's `-log(heatmap + eps)` cost map and plain 8-neighbor A*, then stops
+  before render-MSE optimization.
 - `map_design` uses neural-astar polarity: `1` means passable and `0` means blocked.
 - The diffusion target is bright on the path; inference flips it with
   `cost = 1 - heatmap`.

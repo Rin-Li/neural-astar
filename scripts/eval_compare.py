@@ -1,4 +1,4 @@
-"""Compare Vanilla A*, Neural A*, and diffusion-based Neural A*."""
+"""Compare Vanilla A*, Neural A*, and diffusion-based A* variants."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 import hydra
 import numpy as np
 import torch
-from neural_astar.planner import DiffusionAstar, NeuralAstar, VanillaAstar
+from neural_astar.planner import DiffusionAstar, GDPPNoMSEAstar, NeuralAstar, VanillaAstar
 from neural_astar.utils.data import create_dataloader
 from neural_astar.utils.training import set_global_seeds
 from omegaconf import OmegaConf
@@ -105,16 +105,29 @@ def main(config):
         print("NeuralAstar skipped: set neural_ckpt=path/to/checkpoint.ckpt")
 
     if config.diffusion_ckpt:
+        diffusion_unet_config = OmegaConf.to_container(config.diffusion_model.unet, resolve=True)
+        diffusion_config = OmegaConf.to_container(config.diffusion_model.diffusion, resolve=True)
         diffusion = DiffusionAstar(
-            unet_config=OmegaConf.to_container(config.diffusion_model.unet, resolve=True),
-            diffusion_config=OmegaConf.to_container(config.diffusion_model.diffusion, resolve=True),
+            unet_config=diffusion_unet_config,
+            diffusion_config=diffusion_config,
             Tmax=1.0,
             start_goal_sigma=config.diffusion_model.start_goal_sigma,
         )
         _load_planner_state(diffusion, str(Path(config.diffusion_ckpt)))
         planners.append(("DiffusionAstar", diffusion))
+
+        if config.gdpp_no_mse.enabled:
+            gdpp_no_mse = GDPPNoMSEAstar(
+                unet_config=diffusion_unet_config,
+                diffusion_config=diffusion_config,
+                start_goal_sigma=config.diffusion_model.start_goal_sigma,
+                lam=config.gdpp_no_mse.lam,
+                heuristic_weight=config.gdpp_no_mse.heuristic_weight,
+            )
+            _load_planner_state(gdpp_no_mse, str(Path(config.diffusion_ckpt)))
+            planners.append(("GDPPNoMSE", gdpp_no_mse))
     else:
-        print("DiffusionAstar skipped: set diffusion_ckpt=path/to/checkpoint.ckpt")
+        print("DiffusionAstar/GDPPNoMSE skipped: set diffusion_ckpt=path/to/checkpoint.ckpt")
 
     for name, planner in planners:
         _evaluate(name, planner, loader, config.max_batches, device)
